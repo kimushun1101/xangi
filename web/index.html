@@ -2674,6 +2674,18 @@
             return;
           }
 
+          // + New Chat 後はセッション未作成なので、初回送信時に遅延作成する
+          if (!this.sessionId) {
+            try {
+              var newSessRes = await fetch('/api/sessions', { method: 'POST' });
+              var newSessData = await newSessRes.json();
+              if (newSessData.sessionId) {
+                this.sessionId = newSessData.sessionId;
+                loadSessions();
+              }
+            } catch (e) {}
+          }
+
           var fullMsg = msg;
           if (this.pendingFiles.length > 0) {
             var attachments = this.pendingFiles
@@ -2941,11 +2953,8 @@
           this.sendBtn.style.display = '';
           this.stopBtn.style.display = 'none';
 
-          try {
-            var res = await fetch('/api/sessions', { method: 'POST' });
-            var data = await res.json();
-            if (data.sessionId) this.sessionId = data.sessionId;
-          } catch (e) {}
+          // セッションは初回メッセージ送信時に遅延作成する（ここでは作らない）
+          this.sessionId = null;
           this.platform = 'web';
           this.messagesEl.innerHTML = '';
           this._setTitle('');
