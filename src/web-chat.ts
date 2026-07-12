@@ -3057,6 +3057,9 @@ export function startWebChat(options: WebChatOptions): void {
             'Access-Control-Allow-Origin': '*',
           });
           latency.markInitialReply();
+          // クライアント切断後（下の req 'close' 由来の cancel 含む）に res.write() が
+          // 失敗しても未処理例外でプロセスが落ちないようにする
+          res.on('error', () => {});
 
           const sendSSE = (event: string, data: unknown) => {
             res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -3089,6 +3092,11 @@ export function startWebChat(options: WebChatOptions): void {
               assistantMessageId: stored?.id,
             });
           });
+
+          // 注意: クライアント切断（スマホの画面オフ・電波瞬断・ペイン切替等）で
+          // agent 実行をキャンセルすると、一時的な切断でも生成が途中で打ち切られて
+          // しまう（モバイルで顕著）。切断時はサーバ側の実行を止めず最後まで走らせ、
+          // 結果を transcript に保存する方針とする（再度セッションを開けば読める）。
 
           // ランナーから timeout 状態を chat SSE に流す。
           // PersistentRunner / RunnerManager は EventEmitter で
