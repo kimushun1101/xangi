@@ -2584,6 +2584,34 @@
           } catch (_) {}
         }
 
+        // 送信中に接続が切れたペインを、タブ復帰時に強制的に読み直す。
+        // refreshHistory はメッセージ件数ガードで早期 return するが、切断時は
+        // フロントのエラーバブルで DOM 件数が transcript と一致してしまうため、
+        // ここではガード無しで全再描画する（エラーバブルも消える）。
+        async reloadAfterInterrupt() {
+          this._interruptedResponse = false;
+          if (!this.sessionId || this.sending) return;
+          try {
+            var res = await fetch('/api/sessions/' + encodeURIComponent(this.sessionId));
+            var data = await res.json();
+            var msgs = (data.messages || []).filter(filterAutoTalkInternal).filter(function (m) {
+              return m.role !== 'error';
+            });
+            this.messagesEl.innerHTML = '';
+            for (var i = 0; i < msgs.length; i++) {
+              var m = msgs[i];
+              var content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+              this.addMessage(content, m.role, {
+                id: m.id,
+                createdAt: m.createdAt,
+                usage: m.usage,
+                edited: m.edited,
+              });
+            }
+            this._autoScroll();
+          } catch (_) {}
+        }
+
         async loadSession(id) {
           if (id === this.sessionId && !this.sending) return;
           if (this.sending && this.abortController) {
@@ -2673,6 +2701,7 @@
             await this._executeCommand(msg);
             return;
           }
+          this._interruptedResponse = false;
 
           // + New Chat 後はセッション未作成なので、初回送信時に遅延作成する
           if (!this.sessionId) {
@@ -2706,6 +2735,13 @@
               this.pendingFiles.forEach(function (f) {
                 if (f.localUrl) {
                   var img = document.createElement('img');
+                  // 描画後に blob URL を解放（送信のたびに溜まるリークを防ぐ）。
+                  // デコード済み画像は表示され続けるので見た目は変わらない。
+                  img.onload = (function (url) {
+                    return function () {
+                      URL.revokeObjectURL(url);
+                    };
+                  })(f.localUrl);
                   img.src = f.localUrl;
                   img.style.cssText = 'max-height:80px;border-radius:4px;';
                   imgContainer.appendChild(img);
@@ -2910,7 +2946,14 @@
           } catch (err) {
             if (toolsWrapper.parentElement) toolsWrapper.remove();
             if (assistantWrapper && assistantWrapper.parentElement) assistantWrapper.remove();
-            this.addMessage(err.name === 'AbortError' ? 'Stopped' : 'Connection error', 'error');
+            if (err.name === 'AbortError') {
+              this.addMessage('Stopped', 'error');
+            } else {
+              // 接続断（スマホの画面オフ・電波瞬断など）。サーバ側は実行を止めず
+              // 結果を transcript に保存するので、タブ復帰時に自動で読み直す。
+              this._interruptedResponse = true;
+              this.addMessage('接続が切れました（復帰時に自動で読み直します）', 'error');
+            }
           } finally {
             clearInterval(thinkingTimer);
             this._setProcessing(false);
@@ -3179,6 +3222,16 @@
       }
 
       const paneManager = new PaneManager(panesContainer);
+
+      // スマホでタブがバックグラウンド化 → 復帰した際、送信中に接続が切れて
+      // 途中終了したペインを自動で読み直す。サーバ側は切断でも実行を継続して
+      // transcript に保存しているので、これで完走済みの応答が画面に反映される。
+      document.addEventListener('visibilitychange', function () {
+        if (document.visibilityState !== 'visible') return;
+        paneManager.panes.forEach(function (p) {
+          if (p._interruptedResponse && !p.sending) p.reloadAfterInterrupt();
+        });
+      });
 
       // ─── トップレベル操作 ───
       function openSessionInActivePane(id) {
