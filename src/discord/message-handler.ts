@@ -38,7 +38,11 @@ import {
   updateSessionTitle,
 } from '../sessions.js';
 import { stripPromptMetadata } from '../session-title.js';
-import { deriveThreadTitle } from './thread-title.js';
+import {
+  deriveThreadTitle,
+  appendThreadTitleInstruction,
+  extractThreadTitle,
+} from './thread-title.js';
 import {
   buildDiscordChannelContextLine,
   getDiscordChannelTopic,
@@ -91,6 +95,8 @@ export interface DiscordMessageTarget {
   outputChannel: {
     send: (options: unknown) => Promise<Message>;
   };
+  /** 今ターンで新規作成したスレッドの名前を変更する（作成できたときだけ設定される） */
+  renameThread?: (name: string) => Promise<void>;
   sendInitial: (options: Parameters<Message['reply']>[0]) => Promise<Message>;
 }
 
@@ -104,6 +110,7 @@ async function resolveDiscordMessageTarget(
     id: string;
     name?: string;
     send: (options: unknown) => Promise<Message>;
+    setName: (name: string) => Promise<unknown>;
   } | null = null;
   const replyInThread = getChannelThreadMode(
     settings,
@@ -127,6 +134,7 @@ async function resolveDiscordMessageTarget(
           id: string;
           name?: string;
           send: (options: unknown) => Promise<Message>;
+          setName: (name: string) => Promise<unknown>;
         };
       } catch (err) {
         console.warn(
@@ -158,6 +166,7 @@ async function resolveDiscordMessageTarget(
       : (sourceChannelDetails.parent?.name ?? null)
     : null;
 
+  const createdThread = newThread;
   return {
     conversationChannelId,
     settingsChannelId,
@@ -166,8 +175,13 @@ async function resolveDiscordMessageTarget(
     parentChannelName,
     isThread,
     outputChannel,
+    renameThread: createdThread
+      ? async (name: string) => {
+          await createdThread.setName(name);
+        }
+      : undefined,
     sendInitial: (options: Parameters<Message['reply']>[0]) =>
-      newThread ? newThread.send(options) : message.reply(options),
+      createdThread ? createdThread.send(options) : message.reply(options),
   };
 }
 
@@ -314,6 +328,15 @@ export async function processPrompt(
       prompt = `${restartNote}\n${prompt}`;
     }
 
+    // 新規スレッド作成ターンのみ、初回投稿+返答を要約したスレッド名を相乗り生成する。
+    // 追加の LLM 呼び出しはせず、返信候補と同じマーカー方式で 1 ターン内に取り出す。
+    // 返信候補指示の末尾アンカー剥がし (session-title.ts) を壊さないよう、必ずその「前」に付ける。
+    const threadTitleEnabled =
+      !!target.renameThread && config.discord.threadTitleSummary !== false;
+    if (threadTitleEnabled) {
+      prompt = appendThreadTitleInstruction(prompt);
+    }
+
     const replySuggestionCount = config.discord.replySuggestionCount ?? 3;
     const replySuggestionsEnabled =
       showButtons && loadReplySuggestionsEnabled(config.discord.replySuggestions !== false);
@@ -447,9 +470,17 @@ export async function processPrompt(
       `[xangi] Response length: ${result.length}, session: ${newSessionId.slice(0, 8)}...`
     );
 
+    // スレッド名マーカーは返信候補パイプラインより先に生の result から抜く。
+    // extractReplySuggestions が末尾で stripReplySuggestionMarkup (<xangi_ 以降を切る) を
+    // 呼ぶため、順序を逆にするとタイトルが黙って消える/残る。ここで先に確定させておく。
+    const threadTitleResult = threadTitleEnabled
+      ? extractThreadTitle(result)
+      : { text: result, title: null };
+    const generatedThreadTitle = threadTitleResult.title;
+
     // ファイルパスを抽出して添付送信（テキスト由来 + 構造化 attachments を合算・重複排除）
     const extracted = sanitizeReplySuggestionOutput(
-      result,
+      threadTitleResult.text,
       replySuggestionsEnabled,
       replySuggestionCount
     );
@@ -498,6 +529,19 @@ export async function processPrompt(
         ],
       }),
     });
+
+    // 新規スレッド作成ターンで要約タイトルが取れたら、暫定名を上書きする（1 スレッド 1 回）。
+    // 失敗しても本業には影響させない fire-and-forget。取れなければ暫定名のまま残す。
+    if (generatedThreadTitle && target.renameThread) {
+      target
+        .renameThread(generatedThreadTitle)
+        .then(() => {
+          console.log(`[xangi] Thread renamed to: ${generatedThreadTitle}`);
+        })
+        .catch((err: unknown) => {
+          console.warn('[xangi] Failed to rename thread:', (err as Error)?.message || err);
+        });
+    }
 
     if ('send' in outputChannel) {
       const channel = outputChannel as unknown as {
@@ -562,7 +606,7 @@ export async function processPrompt(
     streamSession?.finish();
     if (error instanceof Error && error.message === 'Request cancelled by user') {
       console.log('[xangi] Request cancelled by user');
-      const lastStreamedText = streamSession?.lastText ?? '';
+      const lastStreamedText = stripReplySuggestionMarkup(streamSession?.lastText ?? '');
       const prefix = lastStreamedText ? lastStreamedText + '\n\n' : '';
       const stoppedText = appendToolHistory(
         `${prefix}🛑 停止しました`,
@@ -585,7 +629,7 @@ export async function processPrompt(
     });
 
     // エラー詳細を表示（途中のテキスト・ツール履歴を残す）
-    const lastStreamedText = streamSession?.lastText ?? '';
+    const lastStreamedText = stripReplySuggestionMarkup(streamSession?.lastText ?? '');
     const prefix = lastStreamedText ? lastStreamedText + '\n\n' : '';
     const errorMessage = appendToolHistory(
       `${prefix}${errorDetail}`,

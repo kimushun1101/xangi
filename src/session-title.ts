@@ -23,6 +23,10 @@ const PREFETCH_FOLLOWUP =
   /初期文脈確認だけを目的に history コマンドを再実行しないでください。さらに古い履歴や追加件数が必要な場合だけ実行してください。\s*/g;
 const REPLY_SUGGESTION_CONTEXT =
   /\s*\[system-context\]\s*通常の回答に続けて、ユーザーが次に送りそうな短い返信候補を\d+件生成してください。[\s\S]*?<\/xangi_reply_suggestions>\s*$/;
+// スレッド名生成指示は返信候補指示の「前」に付くため末尾アンカーにできない。
+// 位置に依存しない専用パターンで剥がす。
+const THREAD_TITLE_CONTEXT =
+  /\s*\[system-context\]\s*この会話にふさわしい簡潔なスレッド名[\s\S]*?<\/xangi_thread_title>/g;
 
 /**
  * プロンプト先頭のメタデータ行を順に剥がして本文だけ返す。
@@ -34,6 +38,7 @@ export function stripPromptMetadata(text: string): string {
     .replace(PLATFORM_SYSTEM_CONTEXT_BLOCK, '')
     .replace(PREFETCHED_HISTORY_BLOCK, '')
     .replace(PREFETCH_FOLLOWUP, '')
+    .replace(THREAD_TITLE_CONTEXT, '')
     .replace(REPLY_SUGGESTION_CONTEXT, '');
   let changed = true;
   while (changed) {

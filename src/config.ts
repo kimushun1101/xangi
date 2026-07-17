@@ -54,6 +54,8 @@ export interface Config {
     injectChannelTopic?: boolean;
     injectTimestamp?: boolean;
     showButtons?: boolean;
+    /** 新規スレッド作成時に初回投稿+返答を要約してスレッド名へ上書きするか (default: true) */
+    threadTitleSummary?: boolean;
     replySuggestions?: boolean;
     replySuggestionCount?: number;
     allowAutoreplyCommand?: boolean;
@@ -365,6 +367,7 @@ export function loadConfig(): Config {
       injectChannelTopic: process.env.INJECT_CHANNEL_TOPIC !== 'false', // デフォルトON
       injectTimestamp: process.env.INJECT_TIMESTAMP !== 'false', // デフォルトON
       showButtons: process.env.DISCORD_SHOW_BUTTONS !== 'false', // デフォルトON
+      threadTitleSummary: process.env.DISCORD_THREAD_TITLE_SUMMARY !== 'false', // デフォルトON
       replySuggestions: process.env.DISCORD_REPLY_SUGGESTIONS === 'true',
       replySuggestionCount: v.int('DISCORD_REPLY_SUGGESTIONS_COUNT', 3, { min: 1, max: 5 }),
       allowAutoreplyCommand: process.env.ALLOW_AUTOREPLY_COMMAND !== 'false', // デフォルトON

@@ -87,7 +87,7 @@ const pendingHistoryInjections = new Set<string>();
 const busySessions = new Set<string>();
 
 function hasInternalPromptMetadata(text: string): boolean {
-  return /\[runtime\]|<prefetched-history\b|(?:<|\[)system-context(?:>|\])|<xangi_reply/.test(text);
+  return /\[runtime\]|<prefetched-history\b|(?:<|\[)system-context(?:>|\])|<xangi_/.test(text);
 }
 
 interface WebChatOptions {

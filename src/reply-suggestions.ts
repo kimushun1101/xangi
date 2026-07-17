@@ -231,22 +231,45 @@ export function sanitizeReplySuggestionOutput(
 
 // 開始タグの断片を隠すときの最小一致長。これ未満（`<` 単体など）は本文として扱う。
 const MARKER_PREFIX = '<xangi_';
+// thread_title は plain text ペイロードのため reply_suggestions の JSON 機構
+// (findInternalBlocks) では拾えない。出力末尾に独立行で置かれる開始タグなので、
+// 完全な行・ストリーミング途中の断片のどちらもここで個別に隠す。
+const THREAD_TITLE_START = '<xangi_thread_title>';
+
+/** 独立行に現れた完全な開始タグの行頭位置。無ければ -1。本文中のインライン引用は無視する。 */
+function standaloneMarkerLineStart(output: string, marker: string): number {
+  for (let index = output.indexOf(marker); index >= 0; index = output.indexOf(marker, index + 1)) {
+    if (isStandaloneMarker(output, index)) return lineStartAt(output, index);
+  }
+  return -1;
+}
+
+/** 末尾に届いた開始タグ断片（`<xangi_`〜完全長未満）が独立行なら、その行頭位置。無ければ -1。 */
+function trailingMarkerFragmentLineStart(output: string, marker: string): number {
+  const trailingWhitespaceStart = output.search(/\s*$/);
+  const contentEnd = trailingWhitespaceStart < 0 ? output.length : trailingWhitespaceStart;
+  for (let len = marker.length - 1; len >= MARKER_PREFIX.length; len--) {
+    if (!output.slice(0, contentEnd).endsWith(marker.slice(0, len))) continue;
+    const fragmentIndex = contentEnd - len;
+    return isStandaloneMarker(output, fragmentIndex) ? lineStartAt(output, fragmentIndex) : -1;
+  }
+  return -1;
+}
 
 /** 独立行の完全・未完ブロックだけを隠し、本文中のインライン引用は保持する。 */
 export function stripReplySuggestionMarkup(output: string): string {
   let visible = removeBlocks(output, findInternalBlocks(output));
 
-  // 開始タグが途中まで届いた時点でも、十分長い独立行の断片だけを隠す。
-  const trailingWhitespaceStart = visible.search(/\s*$/);
-  const contentEnd = trailingWhitespaceStart < 0 ? visible.length : trailingWhitespaceStart;
-  for (let len = START.length - 1; len >= MARKER_PREFIX.length; len--) {
-    if (!visible.slice(0, contentEnd).endsWith(START.slice(0, len))) continue;
-    const fragmentIndex = contentEnd - len;
-    if (isStandaloneMarker(visible, fragmentIndex)) {
-      visible = visible.slice(0, lineStartAt(visible, fragmentIndex));
-    }
-    break;
-  }
+  // reply_suggestions の末尾未完断片（開始タグが途中まで届いた独立行）を隠す。
+  const replyFragment = trailingMarkerFragmentLineStart(visible, START);
+  if (replyFragment >= 0) visible = visible.slice(0, replyFragment);
+
+  // thread_title は完全な独立行タグ・末尾未完断片のどちらも末尾内部領域として隠す。
+  const titleLine = standaloneMarkerLineStart(visible, THREAD_TITLE_START);
+  if (titleLine >= 0) visible = visible.slice(0, titleLine);
+  const titleFragment = trailingMarkerFragmentLineStart(visible, THREAD_TITLE_START);
+  if (titleFragment >= 0) visible = visible.slice(0, titleFragment);
+
   return visible.trimEnd();
 }
 
